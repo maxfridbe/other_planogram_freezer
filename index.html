@@ -436,14 +436,29 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
 
   useEffect(() => {
     const measure = () => {
-      if (!wrapRef.current) return;
-      const availW = Math.max(200, wrapRef.current.clientWidth - 16);
-      const availH = Math.max(240, window.innerHeight * 0.62);
+      const wrap = wrapRef.current;
+      if (!wrap) return;
+      const isDesktop = typeof window.matchMedia === 'function'
+        ? window.matchMedia('(min-width: 768px)').matches
+        : window.innerWidth >= 768;
+      const availW = Math.max(200, wrap.clientWidth - 24);
+      // Desktop: the wrapper is height-constrained by the page grid — fill it.
+      // Mobile: wrapper height follows content (circular), so size from the viewport.
+      const rawH = isDesktop && wrap.clientHeight > 120 ? wrap.clientHeight : window.innerHeight * 0.75;
+      const availH = Math.max(240, rawH - 56);
       setScale(Math.min(availW / freezer.l, availH / freezer.w));
     };
     measure();
     window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    let ro;
+    if (typeof ResizeObserver !== 'undefined' && wrapRef.current) {
+      ro = new ResizeObserver(measure);
+      ro.observe(wrapRef.current);
+    }
+    return () => {
+      window.removeEventListener('resize', measure);
+      if (ro) ro.disconnect();
+    };
   }, [freezer.l, freezer.w]);
 
   const evaluate = (clientX, clientY, item, excludePid) => {
