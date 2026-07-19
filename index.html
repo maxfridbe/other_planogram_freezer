@@ -42,7 +42,7 @@
 <style>
   body { font-family: 'Inter', sans-serif; background: #F2F7FA; color: #0B1B2B; }
   ::selection { background: #a5e0ef; }
-  :focus-visible { outline: 2px solid #0E7490; outline-offset: 2px; border-radius: 4px; }
+  :focus-visible { outline: 0.125rem solid #0E7490; outline-offset: 0.125rem; border-radius: 0.25rem; }
 
   /* The freezer liner: icy interior, steel rim, frost creeping in the corners */
   .freezer-canvas {
@@ -52,26 +52,25 @@
       radial-gradient(ellipse 40% 30% at 100% 0%, rgba(255,255,255,.75), transparent 70%),
       radial-gradient(ellipse 45% 35% at 0% 100%, rgba(255,255,255,.7),  transparent 70%),
       radial-gradient(ellipse 45% 35% at 100% 100%, rgba(255,255,255,.8), transparent 70%),
-      linear-gradient(rgba(14,116,144,.10) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(14,116,144,.10) 1px, transparent 1px),
+      linear-gradient(rgba(14,116,144,.10) 0.0625rem, transparent 0.0625rem),
+      linear-gradient(90deg, rgba(14,116,144,.10) 0.0625rem, transparent 0.0625rem),
       linear-gradient(160deg, #EAF4F9, #D8E9F1);
-    border-radius: 12px;
-    border: 1px solid #B4CEDC;
+    border-radius: 0.75rem;
+    border: 0.0625rem solid #B4CEDC;
     box-shadow:
-      inset 0 2px 14px rgba(11,27,43,.16),
-      inset 0 0 60px rgba(163,203,222,.35),
-      0 0 0 6px #DCE8EF,
-      0 0 0 7px #B9CFDB,
-      0 10px 24px -12px rgba(11,27,43,.35);
+      inset 0 0.125rem 0.875rem rgba(11,27,43,.16),
+      inset 0 0 3.75rem rgba(163,203,222,.35),
+      0 0 0 0.375rem #DCE8EF,
+      0 0 0 0.4375rem #B9CFDB,
+      0 0.625rem 1.5rem -0.75rem rgba(11,27,43,.35);
   }
-  .steel-rim { border-radius: 20px; }
 
   .item-tile {
     position: absolute;
     display: flex; align-items: center; justify-content: center;
     background-size: cover; background-position: center;
-    border-width: 2px; border-style: solid;
-    box-shadow: 0 2px 6px rgba(11,27,43,.25);
+    border-width: 0.125rem; border-style: solid;
+    box-shadow: 0 0.125rem 0.375rem rgba(11,27,43,.25);
     cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
     overflow: visible;
   }
@@ -82,15 +81,18 @@
     display: flex; align-items: center; justify-content: center;
     background-size: cover; background-position: center;
     transform: translate(-50%, -50%);
-    border-width: 3px; border-style: solid;
+    border-width: 0.1875rem; border-style: solid;
   }
-  .ghost-valid   { border-color: #16A34A; box-shadow: 0 0 0 3px rgba(22,163,74,.35), 0 8px 20px rgba(11,27,43,.35); }
-  .ghost-invalid { border-color: #DC2626; box-shadow: 0 0 0 3px rgba(220,38,38,.4), 0 8px 20px rgba(11,27,43,.35); }
+  .ghost-valid   { border-color: #16A34A; box-shadow: 0 0 0 0.1875rem rgba(22,163,74,.35), 0 0.5rem 1.25rem rgba(11,27,43,.35); }
+  .ghost-invalid { border-color: #DC2626; box-shadow: 0 0 0 0.1875rem rgba(220,38,38,.4), 0 0.5rem 1.25rem rgba(11,27,43,.35); }
   .ghost-veil { position:absolute; inset:0; border-radius: inherit; }
   .ghost-valid .ghost-veil { background: rgba(22,163,74,.18); }
   .ghost-invalid .ghost-veil { background: rgba(220,38,38,.38); }
 
-  .drag-card { touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; }
+  /* Panel cards keep native panning (horizontal strip on mobile, vertical column on
+     desktop); a touch is promoted to a drag only after a movement threshold. */
+  .drag-card { touch-action: pan-x; user-select: none; -webkit-user-select: none; cursor: grab; }
+  @media (min-width: 48rem) { .drag-card { touch-action: pan-y; } }
 
   input[type="number"] { font-family: 'IBM Plex Mono', monospace; }
   @media (prefers-reduced-motion: reduce) {
@@ -115,6 +117,11 @@ const { useState, useEffect, useRef } = React;
 const PALETTE = ['#0E7490', '#2563EB', '#7C3AED', '#DB2777', '#EA580C', '#16A34A', '#B45309', '#0D9488'];
 let __uid = 0;
 const uid = () => 'id' + (++__uid) + '_' + Math.random().toString(36).slice(2, 7);
+
+// Geometry math stays in px (pointer events and getBoundingClientRect are px),
+// but everything rendered to the DOM is expressed in rem via the live root font size.
+const pxPerRem = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+const rem = (px) => `${(px / pxPerRem()).toFixed(4)}rem`;
 
 const svgImg = (emoji, bg) =>
   'data:image/svg+xml;utf8,' + encodeURIComponent(
@@ -236,7 +243,7 @@ function Header({ phase }) {
         </div>
         <div>
           <h1 className="font-display font-bold text-lg leading-tight tracking-tight">FrostPlan <span className="text-glacier">Pro</span></h1>
-          <p className="text-[11px] text-inkmute font-mono -mt-0.5">visual freezer planogram</p>
+          <p className="text-[0.6875rem] text-inkmute font-mono -mt-0.5">visual freezer planogram</p>
         </div>
       </div>
       <Stepper phase={phase} />
@@ -431,6 +438,9 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
   dragRef.current = drag;
   const placedRef = useRef(placed);
   placedRef.current = placed;
+  const scaleRef = useRef(0);
+  scaleRef.current = scale;
+  const pendingRef = useRef(null);
 
   const itemById = (id) => inventory.find((it) => it.id === id);
 
@@ -439,7 +449,7 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
       const wrap = wrapRef.current;
       if (!wrap) return;
       const isDesktop = typeof window.matchMedia === 'function'
-        ? window.matchMedia('(min-width: 768px)').matches
+        ? window.matchMedia('(min-width: 48rem)').matches
         : window.innerWidth >= 768;
       const availW = Math.max(200, wrap.clientWidth - 24);
       // Desktop: the wrapper is height-constrained by the page grid — fill it.
@@ -463,11 +473,12 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
 
   const evaluate = (clientX, clientY, item, excludePid) => {
     const el = canvasRef.current;
-    if (!el) return { x: 0, y: 0, valid: false };
+    const s = scaleRef.current;
+    if (!el || s <= 0) return { x: 0, y: 0, valid: false };
     const rect = el.getBoundingClientRect();
     const fp = footprint(item);
-    const x = (clientX - rect.left) / scale - fp.w / 2;
-    const y = (clientY - rect.top) / scale - fp.h / 2;
+    const x = (clientX - rect.left) / s - fp.w / 2;
+    const y = (clientY - rect.top) / s - fp.h / 2;
     const overCanvas = clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
     const eps = 0.001;
     const inBounds = x >= -eps && y >= -eps && x + fp.w <= freezer.l + eps && y + fp.h <= freezer.w + eps;
@@ -481,22 +492,47 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
     return { x, y, valid: overCanvas && inBounds && !collides };
   };
 
+  const beginDrag = (item, source, pid, clientX, clientY) => {
+    setDrag({ item, source, pid: pid || null, px: clientX, py: clientY, ...evaluate(clientX, clientY, item, pid) });
+  };
+
   const startDrag = (e, item, source, pid) => {
-    if (e.type === 'mousedown' && e.button !== 0) return;
+    if (e.type === 'mousedown') {
+      if (e.button !== 0) return;
+      beginDrag(item, source, pid, e.clientX, e.clientY);
+      return;
+    }
+    // Touch: canvas items drag immediately (the canvas never scrolls); panel cards
+    // arm a pending drag so the panel can still be scrolled by swiping along it.
     const pt = getPoint(e);
-    setDrag({ item, source, pid: pid || null, px: pt.clientX, py: pt.clientY, ...evaluate(pt.clientX, pt.clientY, item, pid) });
+    if (source === 'canvas') beginDrag(item, source, pid, pt.clientX, pt.clientY);
+    else pendingRef.current = { item, source, pid: pid || null, startX: pt.clientX, startY: pt.clientY };
   };
 
   useEffect(() => {
-    if (!drag) return;
     const move = (e) => {
-      if (e.cancelable) e.preventDefault();
       const pt = getPoint(e);
       const d = dragRef.current;
-      if (!d) return;
-      setDrag({ ...d, px: pt.clientX, py: pt.clientY, ...evaluate(pt.clientX, pt.clientY, d.item, d.pid) });
+      if (d) {
+        if (e.cancelable) e.preventDefault();
+        setDrag({ ...d, px: pt.clientX, py: pt.clientY, ...evaluate(pt.clientX, pt.clientY, d.item, d.pid) });
+        return;
+      }
+      const pend = pendingRef.current;
+      if (pend && e.type === 'touchmove') {
+        const moved = Math.hypot(pt.clientX - pend.startX, pt.clientY - pend.startY);
+        if (moved > 8) {
+          pendingRef.current = null;
+          // Only claim the gesture if the browser hasn't already committed it to a scroll
+          if (e.cancelable) {
+            e.preventDefault();
+            beginDrag(pend.item, pend.source, pend.pid, pt.clientX, pt.clientY);
+          }
+        }
+      }
     };
     const up = () => {
+      pendingRef.current = null;
       const d = dragRef.current;
       if (d && d.valid) {
         if (d.source === 'panel') {
@@ -505,7 +541,7 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
           setPlaced((ps) => ps.map((p) => (p.pid === d.pid ? { ...p, x: d.x, y: d.y } : p)));
         }
       }
-      setDrag(null);
+      if (dragRef.current) setDrag(null);
     };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
@@ -519,20 +555,20 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
       window.removeEventListener('touchend', up);
       window.removeEventListener('touchcancel', up);
     };
-  }, [!!drag]);
+  }, []);
 
   const removePlaced = (pid) => setPlaced((ps) => ps.filter((p) => p.pid !== pid));
   const gridStep = unit === 'in' ? 6 : 10;
 
   return (
-    <main className="flex flex-col md:flex-row md:h-[calc(100vh-73px)]">
+    <main className="flex flex-col md:flex-row md:h-[calc(100vh-4.5625rem)]">
       {/* Inventory panel — top strip on mobile, left column on desktop */}
       <aside className="no-print md:w-72 shrink-0 border-b md:border-b-0 md:border-r border-icebd bg-white/60">
         <div className="px-4 pt-3 pb-1 flex items-baseline justify-between md:block">
           <h2 className="font-display font-semibold text-sm">Inventory</h2>
-          <p className="text-[11px] font-mono text-inkmute">drag onto the freezer</p>
+          <p className="text-[0.6875rem] font-mono text-inkmute">drag onto the freezer</p>
         </div>
-        <div className="flex md:flex-col gap-2 p-3 overflow-x-auto md:overflow-x-visible md:overflow-y-auto md:max-h-[calc(100vh-140px)]">
+        <div className="flex md:flex-col gap-2 p-3 overflow-x-auto md:overflow-x-visible md:overflow-y-auto md:max-h-[calc(100vh-8.75rem)]">
           {inventory.map((it) => {
             const fp = footprint(it);
             const ms = maxStack(freezer.d, it);
@@ -546,8 +582,8 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
                   style={{ borderColor: it.color, backgroundColor: it.color + '55', backgroundImage: it.img ? `url("${it.img}")` : 'none' }} />
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{it.name}</p>
-                  <p className="text-[11px] font-mono text-inkmute truncate">{it.sku} · {dimLabel(it, unit)}</p>
-                  <p className="text-[11px] font-mono" style={{ color: it.color }}>
+                  <p className="text-[0.6875rem] font-mono text-inkmute truncate">{it.sku} · {dimLabel(it, unit)}</p>
+                  <p className="text-[0.6875rem] font-mono" style={{ color: it.color }}>
                     max stack {ms} · {fp.w}×{fp.h}{unit} footprint
                   </p>
                 </div>
@@ -587,9 +623,9 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
             <React.Fragment>
               <div ref={canvasRef} className="freezer-canvas relative"
                 style={{
-                  width: freezer.l * scale,
-                  height: freezer.w * scale,
-                  backgroundSize: `auto, auto, auto, auto, ${gridStep * scale}px ${gridStep * scale}px, ${gridStep * scale}px ${gridStep * scale}px, auto`,
+                  width: rem(freezer.l * scale),
+                  height: rem(freezer.w * scale),
+                  backgroundSize: `auto, auto, auto, auto, ${rem(gridStep * scale)} ${rem(gridStep * scale)}, ${rem(gridStep * scale)} ${rem(gridStep * scale)}, auto`,
                 }}>
                 {placed.map((p) => {
                   const it = itemById(p.itemId);
@@ -601,8 +637,8 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
                     <div key={p.pid}
                       className={'item-tile ' + (it.shape === 'cylinder' ? 'rounded-full' : 'rounded-md')}
                       style={{
-                        left: p.x * scale, top: p.y * scale,
-                        width: fp.w * scale, height: fp.h * scale,
+                        left: rem(p.x * scale), top: rem(p.y * scale),
+                        width: rem(fp.w * scale), height: rem(fp.h * scale),
                         borderColor: it.color,
                         backgroundColor: it.color + 'BB',
                         backgroundImage: it.img ? `url("${it.img}")` : 'none',
@@ -611,7 +647,7 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
                       onMouseDown={(e) => startDrag(e, it, 'canvas', p.pid)}
                       onTouchStart={(e) => startDrag(e, it, 'canvas', p.pid)}>
                       <span className="px-1 rounded bg-white/85 text-ink font-mono font-semibold text-center leading-tight"
-                        style={{ fontSize: Math.max(9, Math.min(12, fp.w * scale / 6)) }}>
+                        style={{ fontSize: rem(Math.max(9, Math.min(12, fp.w * scale / 6))) }}>
                         {it.sku}<br />×{ms}
                       </span>
                       <button aria-label={`Remove ${it.name}`}
@@ -637,13 +673,13 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
         return (
           <div className={'ghost ' + (drag.valid ? 'ghost-valid' : 'ghost-invalid') + ' ' + (drag.item.shape === 'cylinder' ? 'rounded-full' : 'rounded-md')}
             style={{
-              left: drag.px, top: drag.py,
-              width: Math.max(10, fp.w * scale), height: Math.max(10, fp.h * scale),
+              left: rem(drag.px), top: rem(drag.py),
+              width: rem(Math.max(10, fp.w * scale)), height: rem(Math.max(10, fp.h * scale)),
               backgroundColor: drag.item.color + 'BB',
               backgroundImage: drag.item.img ? `url("${drag.item.img}")` : 'none',
             }}>
             <div className="ghost-veil" />
-            <span className="relative px-1 rounded bg-white/85 text-ink font-mono font-semibold text-[10px]">{drag.item.sku}</span>
+            <span className="relative px-1 rounded bg-white/85 text-ink font-mono font-semibold text-[0.625rem]">{drag.item.sku}</span>
           </div>
         );
       })()}
@@ -698,8 +734,8 @@ function PrintPhase({ unit, freezer, inventory, placed, onBack }) {
         <h2 className="font-display font-semibold text-base mb-3">Placement schematic (top-down)</h2>
         <div className="freezer-canvas relative mx-auto" style={{
           ...forceColor,
-          width: freezer.l * scale, height: freezer.w * scale, maxWidth: '100%',
-          backgroundSize: `auto, auto, auto, auto, ${gridStep * scale}px ${gridStep * scale}px, ${gridStep * scale}px ${gridStep * scale}px, auto`,
+          width: rem(freezer.l * scale), height: rem(freezer.w * scale), maxWidth: '100%',
+          backgroundSize: `auto, auto, auto, auto, ${rem(gridStep * scale)} ${rem(gridStep * scale)}, ${rem(gridStep * scale)} ${rem(gridStep * scale)}, auto`,
         }}>
           {placed.map((p) => {
             const it = itemById(p.itemId);
@@ -711,13 +747,13 @@ function PrintPhase({ unit, freezer, inventory, placed, onBack }) {
                 className={'absolute flex items-center justify-center border-2 ' + (it.shape === 'cylinder' ? 'rounded-full' : 'rounded-md')}
                 style={{
                   ...forceColor,
-                  left: p.x * scale, top: p.y * scale, width: fp.w * scale, height: fp.h * scale,
+                  left: rem(p.x * scale), top: rem(p.y * scale), width: rem(fp.w * scale), height: rem(fp.h * scale),
                   borderColor: it.color, backgroundColor: it.color + 'BB',
                   backgroundImage: it.img ? `url("${it.img}")` : 'none',
                   backgroundSize: 'cover', backgroundPosition: 'center',
                 }}>
                 <span className="px-1 rounded bg-white/90 text-ink font-mono font-semibold text-center leading-tight"
-                  style={{ fontSize: Math.max(8, Math.min(11, fp.w * scale / 6)) }}>
+                  style={{ fontSize: rem(Math.max(8, Math.min(11, fp.w * scale / 6))) }}>
                   {it.sku}<br />×{ms}
                 </span>
               </div>
