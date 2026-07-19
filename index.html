@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FrostPlan Pro — Freezer Planogram</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          display: ['Sora', 'sans-serif'],
+          body: ['Inter', 'sans-serif'],
+          mono: ['"IBM Plex Mono"', 'monospace'],
+        },
+        colors: {
+          ink: '#0B1B2B',
+          inkmute: '#4A6274',
+          frost: '#F2F7FA',
+          icebd: '#C9DEE9',
+          glacier: '#0E7490',
+          glacierdeep: '#155E75',
+        },
+      },
+    },
+  };
+</script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script>
+  // Newer Babel standalone defaults the react preset to the "automatic" JSX runtime,
+  // which emits ESM imports of react/jsx-runtime — incompatible with UMD React globals.
+  Babel.registerPreset('react-classic', {
+    presets: [[Babel.availablePresets['react'], { runtime: 'classic' }]],
+  });
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; background: #F2F7FA; color: #0B1B2B; }
+  ::selection { background: #a5e0ef; }
+  :focus-visible { outline: 2px solid #0E7490; outline-offset: 2px; border-radius: 4px; }
+
+  /* The freezer liner: icy interior, steel rim, frost creeping in the corners */
+  .freezer-canvas {
+    background-color: #E4F0F6;
+    background-image:
+      radial-gradient(ellipse 40% 30% at 0% 0%,   rgba(255,255,255,.85), transparent 70%),
+      radial-gradient(ellipse 40% 30% at 100% 0%, rgba(255,255,255,.75), transparent 70%),
+      radial-gradient(ellipse 45% 35% at 0% 100%, rgba(255,255,255,.7),  transparent 70%),
+      radial-gradient(ellipse 45% 35% at 100% 100%, rgba(255,255,255,.8), transparent 70%),
+      linear-gradient(rgba(14,116,144,.10) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(14,116,144,.10) 1px, transparent 1px),
+      linear-gradient(160deg, #EAF4F9, #D8E9F1);
+    border-radius: 12px;
+    border: 1px solid #B4CEDC;
+    box-shadow:
+      inset 0 2px 14px rgba(11,27,43,.16),
+      inset 0 0 60px rgba(163,203,222,.35),
+      0 0 0 6px #DCE8EF,
+      0 0 0 7px #B9CFDB,
+      0 10px 24px -12px rgba(11,27,43,.35);
+  }
+  .steel-rim { border-radius: 20px; }
+
+  .item-tile {
+    position: absolute;
+    display: flex; align-items: center; justify-content: center;
+    background-size: cover; background-position: center;
+    border-width: 2px; border-style: solid;
+    box-shadow: 0 2px 6px rgba(11,27,43,.25);
+    cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+    overflow: visible;
+  }
+  .item-tile:active { cursor: grabbing; }
+
+  .ghost {
+    position: fixed; z-index: 60; pointer-events: none;
+    display: flex; align-items: center; justify-content: center;
+    background-size: cover; background-position: center;
+    transform: translate(-50%, -50%);
+    border-width: 3px; border-style: solid;
+  }
+  .ghost-valid   { border-color: #16A34A; box-shadow: 0 0 0 3px rgba(22,163,74,.35), 0 8px 20px rgba(11,27,43,.35); }
+  .ghost-invalid { border-color: #DC2626; box-shadow: 0 0 0 3px rgba(220,38,38,.4), 0 8px 20px rgba(11,27,43,.35); }
+  .ghost-veil { position:absolute; inset:0; border-radius: inherit; }
+  .ghost-valid .ghost-veil { background: rgba(22,163,74,.18); }
+  .ghost-invalid .ghost-veil { background: rgba(220,38,38,.38); }
+
+  .drag-card { touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; }
+
+  input[type="number"] { font-family: 'IBM Plex Mono', monospace; }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+  @media print {
+    .no-print { display: none !important; }
+    body { background: #fff; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    @page { margin: 12mm; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react-classic">
+const { useState, useEffect, useRef } = React;
+
+/* ---------- constants & helpers ---------- */
+
+const PALETTE = ['#0E7490', '#2563EB', '#7C3AED', '#DB2777', '#EA580C', '#16A34A', '#B45309', '#0D9488'];
+let __uid = 0;
+const uid = () => 'id' + (++__uid) + '_' + Math.random().toString(36).slice(2, 7);
+
+const svgImg = (emoji, bg) =>
+  'data:image/svg+xml;utf8,' + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96"><rect width="96" height="96" fill="${bg}"/><text x="48" y="62" font-size="46" text-anchor="middle">${emoji}</text></svg>`
+  );
+
+const SAMPLE_ITEMS = () => [
+  { name: 'Vanilla Bean Tub',   sku: 'IC-001', shape: 'cylinder', radius: 4,   d: 7,   img: svgImg('🍨', '#bae6fd') },
+  { name: 'Pepperoni Pizza',    sku: 'PZ-104', shape: 'box', l: 12, w: 12, d: 1.5, img: svgImg('🍕', '#fecaca') },
+  { name: 'Family Lasagna',     sku: 'LZ-220', shape: 'box', l: 10, w: 8,  d: 3,   img: svgImg('🍝', '#fed7aa') },
+  { name: 'Broccoli Florets',   sku: 'VG-310', shape: 'box', l: 8,  w: 5,  d: 2,   img: svgImg('🥦', '#bbf7d0') },
+  { name: 'Fish Sticks',        sku: 'FS-450', shape: 'box', l: 9,  w: 6,  d: 2.5, img: svgImg('🐟', '#bfdbfe') },
+  { name: 'Cookie Dough Roll',  sku: 'CD-512', shape: 'cylinder', radius: 2.5, d: 9, img: svgImg('🍪', '#e9d5ff') },
+  { name: 'Berry Medley',       sku: 'BM-608', shape: 'box', l: 7,  w: 5,  d: 2,   img: svgImg('🫐', '#ddd6fe') },
+  { name: 'Ice Pops 12ct',      sku: 'IP-777', shape: 'box', l: 11, w: 4,  d: 3,   img: svgImg('🧊', '#a5f3fc') },
+];
+
+const withMeta = (items) => items.map((it, i) => ({ id: uid(), color: PALETTE[i % PALETTE.length], ...it }));
+
+const footprint = (it) =>
+  it.shape === 'cylinder'
+    ? { w: (parseFloat(it.radius) || 0) * 2, h: (parseFloat(it.radius) || 0) * 2 }
+    : { w: parseFloat(it.l) || 0, h: parseFloat(it.w) || 0 };
+
+const maxStack = (freezerD, it) => {
+  const d = parseFloat(it.d) || 0;
+  return d > 0 ? Math.floor(freezerD / d) : 0;
+};
+
+const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+const getPoint = (e) => {
+  if (e.touches && e.touches.length) return e.touches[0];
+  if (e.changedTouches && e.changedTouches.length) return e.changedTouches[0];
+  return e;
+};
+
+const dimLabel = (it, unit) =>
+  it.shape === 'cylinder'
+    ? `r${it.radius}${unit} × ${it.d}${unit} deep`
+    : `${it.l} × ${it.w} × ${it.d} ${unit}`;
+
+function parseCSV(text) {
+  const errors = [];
+  const items = [];
+  const lines = text.trim().split(/\r?\n/).filter((l) => l.trim() !== '');
+  if (lines.length === 0) return { items, errors: ['No CSV data provided.'] };
+
+  const headers = lines[0].split(',').map((h) => h.trim().toLowerCase());
+  const col = (n) => headers.indexOf(n);
+  for (const req of ['name', 'sku', 'shape']) {
+    if (col(req) === -1) errors.push(`Missing required header "${req}". Expected: Name, SKU, Shape, L, W, D, Radius, ImgURL`);
+  }
+  if (errors.length) return { items, errors };
+
+  lines.slice(1).forEach((line, i) => {
+    const row = i + 2;
+    const cells = line.split(',').map((c) => c.trim());
+    const get = (n) => (col(n) === -1 ? '' : cells[col(n)] || '');
+    const num = (n) => parseFloat(get(n));
+
+    const name = get('name'), sku = get('sku'), shape = get('shape').toLowerCase();
+    if (!name || !sku) { errors.push(`Row ${row}: Name and SKU are required.`); return; }
+    if (shape !== 'box' && shape !== 'cylinder') { errors.push(`Row ${row}: Shape must be "box" or "cylinder" (got "${get('shape')}").`); return; }
+
+    const item = { name, sku, shape, img: get('imgurl') || null };
+    if (shape === 'box') {
+      const l = num('l'), w = num('w'), d = num('d');
+      if (!(l > 0 && w > 0 && d > 0)) { errors.push(`Row ${row}: Box "${name}" requires positive L, W, and D.`); return; }
+      Object.assign(item, { l, w, d });
+    } else {
+      const r = num('radius'), d = num('d');
+      if (!(r > 0 && d > 0)) { errors.push(`Row ${row}: Cylinder "${name}" requires positive Radius and D.`); return; }
+      Object.assign(item, { radius: r, d });
+    }
+    items.push(item);
+  });
+  return { items, errors };
+}
+
+/* ---------- small UI atoms ---------- */
+
+const Snowflake = ({ className }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <line x1="12" y1="2" x2="12" y2="22" /><line x1="2" y1="12" x2="22" y2="12" />
+    <line x1="4.9" y1="4.9" x2="19.1" y2="19.1" /><line x1="19.1" y1="4.9" x2="4.9" y2="19.1" />
+  </svg>
+);
+
+const XIcon = () => (
+  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+    <line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" />
+  </svg>
+);
+
+function Stepper({ phase }) {
+  const steps = [['setup', '1 · Setup'], ['plan', '2 · Plan'], ['print', '3 · Print']];
+  return (
+    <div className="flex items-center gap-1 font-mono text-xs">
+      {steps.map(([key, label], i) => (
+        <React.Fragment key={key}>
+          {i > 0 && <span className="text-icebd">──</span>}
+          <span className={
+            'px-2 py-1 rounded-full border ' +
+            (phase === key ? 'bg-glacier text-white border-glacier' : 'text-inkmute border-icebd bg-white')
+          }>{label}</span>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+function Header({ phase }) {
+  return (
+    <header className="no-print flex flex-wrap items-center justify-between gap-3 px-4 md:px-8 py-4 border-b border-icebd bg-white/70 backdrop-blur sticky top-0 z-40">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-glacier text-white flex items-center justify-center shadow-sm">
+          <Snowflake className="w-5 h-5" />
+        </div>
+        <div>
+          <h1 className="font-display font-bold text-lg leading-tight tracking-tight">FrostPlan <span className="text-glacier">Pro</span></h1>
+          <p className="text-[11px] text-inkmute font-mono -mt-0.5">visual freezer planogram</p>
+        </div>
+      </div>
+      <Stepper phase={phase} />
+    </header>
+  );
+}
+
+/* ---------- Setup phase ---------- */
+
+function SetupPhase({ unit, setUnit, dims, setDims, inventory, setInventory, onStart }) {
+  const [showCSV, setShowCSV] = useState(false);
+  const [csvText, setCsvText] = useState('');
+  const [csvErrors, setCsvErrors] = useState([]);
+
+  const fz = { l: parseFloat(dims.l) || 0, w: parseFloat(dims.w) || 0, d: parseFloat(dims.d) || 0 };
+  const dimsValid = fz.l > 0 && fz.w > 0 && fz.d > 0;
+  const canStart = dimsValid && inventory.length > 0;
+
+  const setDim = (k) => (e) => setDims({ ...dims, [k]: e.target.value });
+  const updateItem = (id, patch) => setInventory(inventory.map((it) => (it.id === id ? { ...it, ...patch } : it)));
+  const removeItem = (id) => setInventory(inventory.filter((it) => it.id !== id));
+
+  const importCSV = () => {
+    const { items, errors } = parseCSV(csvText);
+    setCsvErrors(errors);
+    if (items.length) {
+      setInventory([...inventory, ...withMeta(items)]);
+      if (!errors.length) { setCsvText(''); setShowCSV(false); }
+    }
+  };
+
+  const numCell = (it, key, disabled) => (
+    <input type="number" min="0" step="0.5" disabled={disabled}
+      value={disabled ? '' : (it[key] ?? '')}
+      onChange={(e) => updateItem(it.id, { [key]: e.target.value === '' ? '' : parseFloat(e.target.value) })}
+      className={'w-16 px-1.5 py-1 text-sm rounded border ' + (disabled ? 'bg-frost border-transparent text-icebd' : 'bg-white border-icebd')} />
+  );
+
+  return (
+    <main className="max-w-5xl mx-auto px-4 md:px-8 py-8 space-y-6">
+      <section className="bg-white rounded-xl border border-icebd shadow-sm p-5 md:p-6">
+        <h2 className="font-display font-semibold text-base mb-1">Freezer chest</h2>
+        <p className="text-sm text-inkmute mb-4">Internal dimensions of the chest, viewed from above. Depth is how deep items stack.</p>
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <span className="block text-xs font-mono text-inkmute mb-1">Units</span>
+            <div className="inline-flex rounded-lg border border-icebd overflow-hidden">
+              {[['in', 'Inches'], ['cm', 'Centimeters']].map(([u, label]) => (
+                <button key={u} onClick={() => setUnit(u)}
+                  className={'px-3 py-2 text-sm font-medium ' + (unit === u ? 'bg-glacier text-white' : 'bg-white text-inkmute hover:bg-frost')}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {[['l', 'Length (horizontal)'], ['w', 'Width (front-to-back)'], ['d', 'Depth (stacking)']].map(([k, label]) => (
+            <label key={k} className="block">
+              <span className="block text-xs font-mono text-inkmute mb-1">{label}</span>
+              <div className="flex items-center gap-1.5">
+                <input type="number" min="0" step="1" value={dims[k]} onChange={setDim(k)}
+                  className="w-24 px-2.5 py-2 rounded-lg border border-icebd bg-white text-sm" />
+                <span className="text-sm font-mono text-inkmute">{unit}</span>
+              </div>
+            </label>
+          ))}
+        </div>
+        {!dimsValid && <p className="mt-3 text-xs text-red-600">All three dimensions must be positive numbers.</p>}
+      </section>
+
+      <section className="bg-white rounded-xl border border-icebd shadow-sm p-5 md:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div>
+            <h2 className="font-display font-semibold text-base">Inventory</h2>
+            <p className="text-sm text-inkmute">{inventory.length === 0 ? 'No items yet — generate a sample set or paste CSV.' : `${inventory.length} item${inventory.length === 1 ? '' : 's'} loaded.`}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setInventory([...inventory, ...withMeta(SAMPLE_ITEMS())])}
+              className="px-3 py-2 rounded-lg bg-glacier text-white text-sm font-medium hover:bg-glacierdeep">
+              Generate sample items
+            </button>
+            <button onClick={() => { setShowCSV(!showCSV); setCsvErrors([]); }}
+              className="px-3 py-2 rounded-lg border border-icebd text-sm font-medium hover:bg-frost">
+              {showCSV ? 'Hide CSV import' : 'Import CSV'}
+            </button>
+            {inventory.length > 0 && (
+              <button onClick={() => setInventory([])}
+                className="px-3 py-2 rounded-lg border border-red-200 text-red-600 text-sm font-medium hover:bg-red-50">
+                Clear all
+              </button>
+            )}
+          </div>
+        </div>
+
+        {showCSV && (
+          <div className="mb-5 rounded-lg border border-icebd bg-frost p-4">
+            <p className="text-xs font-mono text-inkmute mb-2">Headers: Name, SKU, Shape, L, W, D, Radius, ImgURL — Shape is "box" or "cylinder"</p>
+            <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} rows="6"
+              placeholder={'Name, SKU, Shape, L, W, D, Radius, ImgURL\nMint Chip Tub, IC-002, cylinder, , , 7, 4,\nVeggie Burgers, VB-101, box, 8, 6, 2, ,'}
+              className="w-full font-mono text-xs p-3 rounded-lg border border-icebd bg-white" />
+            <div className="mt-2 flex items-center gap-3">
+              <button onClick={importCSV} className="px-3 py-2 rounded-lg bg-glacier text-white text-sm font-medium hover:bg-glacierdeep">Parse and add items</button>
+            </div>
+            {csvErrors.length > 0 && (
+              <ul className="mt-3 space-y-1">
+                {csvErrors.map((err, i) => <li key={i} className="text-xs text-red-600">⚠ {err}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {inventory.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-mono text-inkmute border-b border-icebd">
+                  <th className="py-2 pr-2"></th>
+                  <th className="py-2 pr-2">Name</th>
+                  <th className="py-2 pr-2">SKU</th>
+                  <th className="py-2 pr-2">Shape</th>
+                  <th className="py-2 pr-2">L ({unit})</th>
+                  <th className="py-2 pr-2">W ({unit})</th>
+                  <th className="py-2 pr-2">D ({unit})</th>
+                  <th className="py-2 pr-2">Radius ({unit})</th>
+                  <th className="py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {inventory.map((it) => (
+                  <tr key={it.id} className="border-b border-frost">
+                    <td className="py-2 pr-2">
+                      <div className="w-8 h-8 rounded-md border-2 bg-cover bg-center"
+                        style={{ borderColor: it.color, backgroundColor: it.color + '33', backgroundImage: it.img ? `url("${it.img}")` : 'none' }} />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <input value={it.name} onChange={(e) => updateItem(it.id, { name: e.target.value })}
+                        className="w-36 px-1.5 py-1 rounded border border-icebd bg-white" />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <input value={it.sku} onChange={(e) => updateItem(it.id, { sku: e.target.value })}
+                        className="w-24 px-1.5 py-1 rounded border border-icebd bg-white font-mono text-xs" />
+                    </td>
+                    <td className="py-2 pr-2">
+                      <select value={it.shape} onChange={(e) => updateItem(it.id, { shape: e.target.value })}
+                        className="px-1.5 py-1 rounded border border-icebd bg-white">
+                        <option value="box">box</option>
+                        <option value="cylinder">cylinder</option>
+                      </select>
+                    </td>
+                    <td className="py-2 pr-2">{numCell(it, 'l', it.shape === 'cylinder')}</td>
+                    <td className="py-2 pr-2">{numCell(it, 'w', it.shape === 'cylinder')}</td>
+                    <td className="py-2 pr-2">{numCell(it, 'd', false)}</td>
+                    <td className="py-2 pr-2">{numCell(it, 'radius', it.shape === 'box')}</td>
+                    <td className="py-2 text-right">
+                      <button onClick={() => removeItem(it.id)} aria-label={`Remove ${it.name}`}
+                        className="w-7 h-7 inline-flex items-center justify-center rounded-md text-red-500 hover:bg-red-50">
+                        <XIcon />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <div className="flex items-center justify-end gap-4">
+        {!canStart && (
+          <p className="text-xs text-inkmute">
+            {dimsValid ? 'Add at least one inventory item to continue.' : 'Enter valid freezer dimensions to continue.'}
+          </p>
+        )}
+        <button onClick={onStart} disabled={!canStart}
+          className={'px-6 py-3 rounded-xl font-display font-semibold text-sm shadow-sm ' +
+            (canStart ? 'bg-glacier text-white hover:bg-glacierdeep' : 'bg-icebd/50 text-inkmute/50 cursor-not-allowed')}>
+          Start planning →
+        </button>
+      </div>
+    </main>
+  );
+}
+
+/* ---------- Planning phase ---------- */
+
+function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, onPrint, onBackToSetup }) {
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [scale, setScale] = useState(0);
+  const [drag, setDrag] = useState(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const dragRef = useRef(null);
+  dragRef.current = drag;
+  const placedRef = useRef(placed);
+  placedRef.current = placed;
+
+  const itemById = (id) => inventory.find((it) => it.id === id);
+
+  useEffect(() => {
+    const measure = () => {
+      if (!wrapRef.current) return;
+      const availW = Math.max(200, wrapRef.current.clientWidth - 16);
+      const availH = Math.max(240, window.innerHeight * 0.62);
+      setScale(Math.min(availW / freezer.l, availH / freezer.w));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [freezer.l, freezer.w]);
+
+  const evaluate = (clientX, clientY, item, excludePid) => {
+    const el = canvasRef.current;
+    if (!el) return { x: 0, y: 0, valid: false };
+    const rect = el.getBoundingClientRect();
+    const fp = footprint(item);
+    const x = (clientX - rect.left) / scale - fp.w / 2;
+    const y = (clientY - rect.top) / scale - fp.h / 2;
+    const overCanvas = clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+    const eps = 0.001;
+    const inBounds = x >= -eps && y >= -eps && x + fp.w <= freezer.l + eps && y + fp.h <= freezer.w + eps;
+    const collides = placedRef.current.some((p) => {
+      if (p.pid === excludePid) return false;
+      const other = itemById(p.itemId);
+      if (!other) return false;
+      const ofp = footprint(other);
+      return overlaps({ x, y, w: fp.w, h: fp.h }, { x: p.x, y: p.y, w: ofp.w, h: ofp.h });
+    });
+    return { x, y, valid: overCanvas && inBounds && !collides };
+  };
+
+  const startDrag = (e, item, source, pid) => {
+    if (e.type === 'mousedown' && e.button !== 0) return;
+    const pt = getPoint(e);
+    setDrag({ item, source, pid: pid || null, px: pt.clientX, py: pt.clientY, ...evaluate(pt.clientX, pt.clientY, item, pid) });
+  };
+
+  useEffect(() => {
+    if (!drag) return;
+    const move = (e) => {
+      if (e.cancelable) e.preventDefault();
+      const pt = getPoint(e);
+      const d = dragRef.current;
+      if (!d) return;
+      setDrag({ ...d, px: pt.clientX, py: pt.clientY, ...evaluate(pt.clientX, pt.clientY, d.item, d.pid) });
+    };
+    const up = () => {
+      const d = dragRef.current;
+      if (d && d.valid) {
+        if (d.source === 'panel') {
+          setPlaced((ps) => [...ps, { pid: uid(), itemId: d.item.id, x: d.x, y: d.y }]);
+        } else {
+          setPlaced((ps) => ps.map((p) => (p.pid === d.pid ? { ...p, x: d.x, y: d.y } : p)));
+        }
+      }
+      setDrag(null);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    window.addEventListener('touchmove', move, { passive: false });
+    window.addEventListener('touchend', up);
+    window.addEventListener('touchcancel', up);
+    return () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('touchend', up);
+      window.removeEventListener('touchcancel', up);
+    };
+  }, [!!drag]);
+
+  const removePlaced = (pid) => setPlaced((ps) => ps.filter((p) => p.pid !== pid));
+  const gridStep = unit === 'in' ? 6 : 10;
+
+  return (
+    <main className="flex flex-col md:flex-row md:h-[calc(100vh-73px)]">
+      {/* Inventory panel — top strip on mobile, left column on desktop */}
+      <aside className="no-print md:w-72 shrink-0 border-b md:border-b-0 md:border-r border-icebd bg-white/60">
+        <div className="px-4 pt-3 pb-1 flex items-baseline justify-between md:block">
+          <h2 className="font-display font-semibold text-sm">Inventory</h2>
+          <p className="text-[11px] font-mono text-inkmute">drag onto the freezer</p>
+        </div>
+        <div className="flex md:flex-col gap-2 p-3 overflow-x-auto md:overflow-x-visible md:overflow-y-auto md:max-h-[calc(100vh-140px)]">
+          {inventory.map((it) => {
+            const fp = footprint(it);
+            const ms = maxStack(freezer.d, it);
+            return (
+              <div key={it.id}
+                className="drag-card shrink-0 w-52 md:w-auto rounded-lg border-2 p-2.5 flex items-center gap-2.5 bg-white"
+                style={{ borderColor: it.color, backgroundColor: it.color + '14' }}
+                onMouseDown={(e) => startDrag(e, it, 'panel')}
+                onTouchStart={(e) => startDrag(e, it, 'panel')}>
+                <div className={'w-10 h-10 shrink-0 border-2 bg-cover bg-center ' + (it.shape === 'cylinder' ? 'rounded-full' : 'rounded-md')}
+                  style={{ borderColor: it.color, backgroundColor: it.color + '55', backgroundImage: it.img ? `url("${it.img}")` : 'none' }} />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{it.name}</p>
+                  <p className="text-[11px] font-mono text-inkmute truncate">{it.sku} · {dimLabel(it, unit)}</p>
+                  <p className="text-[11px] font-mono" style={{ color: it.color }}>
+                    max stack {ms} · {fp.w}×{fp.h}{unit} footprint
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </aside>
+
+      {/* Canvas area */}
+      <section className="flex-1 flex flex-col min-w-0">
+        <div className="no-print flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+          <p className="text-xs font-mono text-inkmute">
+            Freezer {freezer.l} × {freezer.w} × {freezer.d} {unit} · grid = {gridStep}{unit} · {placed.length} placement{placed.length === 1 ? '' : 's'}
+          </p>
+          <div className="flex items-center gap-2">
+            <button onClick={onBackToSetup} className="px-3 py-1.5 rounded-lg border border-icebd text-xs font-medium hover:bg-frost">← Setup</button>
+            {confirmReset ? (
+              <span className="flex items-center gap-1.5 text-xs">
+                <span className="text-red-600 font-medium">Erase everything?</span>
+                <button onClick={onStartOver} className="px-2.5 py-1.5 rounded-lg bg-red-600 text-white font-medium">Yes</button>
+                <button onClick={() => setConfirmReset(false)} className="px-2.5 py-1.5 rounded-lg border border-icebd font-medium">No</button>
+              </span>
+            ) : (
+              <button onClick={() => setConfirmReset(true)} className="px-3 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-medium hover:bg-red-50">Start over</button>
+            )}
+            <button onClick={onPrint} disabled={placed.length === 0}
+              className={'px-4 py-1.5 rounded-lg text-xs font-semibold ' +
+                (placed.length ? 'bg-glacier text-white hover:bg-glacierdeep' : 'bg-icebd/50 text-inkmute/50 cursor-not-allowed')}>
+              Print report →
+            </button>
+          </div>
+        </div>
+
+        <div ref={wrapRef} className="flex-1 flex flex-col items-center justify-center px-4 pb-6">
+          {scale > 0 && (
+            <React.Fragment>
+              <div ref={canvasRef} className="freezer-canvas relative"
+                style={{
+                  width: freezer.l * scale,
+                  height: freezer.w * scale,
+                  backgroundSize: `auto, auto, auto, auto, ${gridStep * scale}px ${gridStep * scale}px, ${gridStep * scale}px ${gridStep * scale}px, auto`,
+                }}>
+                {placed.map((p) => {
+                  const it = itemById(p.itemId);
+                  if (!it) return null;
+                  const fp = footprint(it);
+                  const ms = maxStack(freezer.d, it);
+                  const beingDragged = drag && drag.pid === p.pid;
+                  return (
+                    <div key={p.pid}
+                      className={'item-tile ' + (it.shape === 'cylinder' ? 'rounded-full' : 'rounded-md')}
+                      style={{
+                        left: p.x * scale, top: p.y * scale,
+                        width: fp.w * scale, height: fp.h * scale,
+                        borderColor: it.color,
+                        backgroundColor: it.color + 'BB',
+                        backgroundImage: it.img ? `url("${it.img}")` : 'none',
+                        opacity: beingDragged ? 0.25 : 1,
+                      }}
+                      onMouseDown={(e) => startDrag(e, it, 'canvas', p.pid)}
+                      onTouchStart={(e) => startDrag(e, it, 'canvas', p.pid)}>
+                      <span className="px-1 rounded bg-white/85 text-ink font-mono font-semibold text-center leading-tight"
+                        style={{ fontSize: Math.max(9, Math.min(12, fp.w * scale / 6)) }}>
+                        {it.sku}<br />×{ms}
+                      </span>
+                      <button aria-label={`Remove ${it.name}`}
+                        className="no-print absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-600 text-white flex items-center justify-center shadow"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        onClick={(e) => { e.stopPropagation(); removePlaced(p.pid); }}>
+                        <XIcon />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-3 font-display font-semibold text-sm text-glacierdeep tracking-wide">Customer Stands Here ↓</p>
+            </React.Fragment>
+          )}
+        </div>
+      </section>
+
+      {/* Ghost cursor */}
+      {drag && scale > 0 && (() => {
+        const fp = footprint(drag.item);
+        return (
+          <div className={'ghost ' + (drag.valid ? 'ghost-valid' : 'ghost-invalid') + ' ' + (drag.item.shape === 'cylinder' ? 'rounded-full' : 'rounded-md')}
+            style={{
+              left: drag.px, top: drag.py,
+              width: Math.max(10, fp.w * scale), height: Math.max(10, fp.h * scale),
+              backgroundColor: drag.item.color + 'BB',
+              backgroundImage: drag.item.img ? `url("${drag.item.img}")` : 'none',
+            }}>
+            <div className="ghost-veil" />
+            <span className="relative px-1 rounded bg-white/85 text-ink font-mono font-semibold text-[10px]">{drag.item.sku}</span>
+          </div>
+        );
+      })()}
+    </main>
+  );
+}
+
+/* ---------- Print phase ---------- */
+
+function PrintPhase({ unit, freezer, inventory, placed, onBack }) {
+  useEffect(() => {
+    const t = setTimeout(() => window.print(), 500);
+    return () => clearTimeout(t);
+  }, []);
+
+  const itemById = (id) => inventory.find((it) => it.id === id);
+  const scale = 660 / freezer.l;
+  const gridStep = unit === 'in' ? 6 : 10;
+
+  const agg = {};
+  placed.forEach((p) => {
+    const it = itemById(p.itemId);
+    if (!it) return;
+    if (!agg[it.sku]) agg[it.sku] = { item: it, placements: 0 };
+    agg[it.sku].placements++;
+  });
+  const rows = Object.values(agg).map(({ item, placements }) => {
+    const ms = maxStack(freezer.d, item);
+    return { item, placements, ms, total: placements * ms };
+  });
+  const grandTotal = rows.reduce((s, r) => s + r.total, 0);
+  const forceColor = { WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' };
+
+  return (
+    <main className="max-w-3xl mx-auto px-6 py-8">
+      <div className="no-print mb-6 flex gap-2">
+        <button onClick={onBack} className="px-4 py-2 rounded-lg border border-icebd text-sm font-medium hover:bg-frost">← Back to planning</button>
+        <button onClick={() => window.print()} className="px-4 py-2 rounded-lg bg-glacier text-white text-sm font-medium hover:bg-glacierdeep">Print again</button>
+      </div>
+
+      <header className="border-b-2 border-ink pb-4 mb-6">
+        <h1 className="font-display font-bold text-2xl">FrostPlan Pro — Freezer Planogram Report</h1>
+        <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1 text-sm font-mono">
+          <p><span className="text-inkmute">Generated:</span> {new Date().toLocaleDateString()}</p>
+          <p><span className="text-inkmute">Freezer:</span> {freezer.l} × {freezer.w} × {freezer.d} {unit}</p>
+          <p><span className="text-inkmute">Unique SKUs:</span> {rows.length}</p>
+          <p><span className="text-inkmute">Total capacity:</span> {grandTotal} units</p>
+        </div>
+      </header>
+
+      <section className="mb-8">
+        <h2 className="font-display font-semibold text-base mb-3">Placement schematic (top-down)</h2>
+        <div className="freezer-canvas relative mx-auto" style={{
+          ...forceColor,
+          width: freezer.l * scale, height: freezer.w * scale, maxWidth: '100%',
+          backgroundSize: `auto, auto, auto, auto, ${gridStep * scale}px ${gridStep * scale}px, ${gridStep * scale}px ${gridStep * scale}px, auto`,
+        }}>
+          {placed.map((p) => {
+            const it = itemById(p.itemId);
+            if (!it) return null;
+            const fp = footprint(it);
+            const ms = maxStack(freezer.d, it);
+            return (
+              <div key={p.pid}
+                className={'absolute flex items-center justify-center border-2 ' + (it.shape === 'cylinder' ? 'rounded-full' : 'rounded-md')}
+                style={{
+                  ...forceColor,
+                  left: p.x * scale, top: p.y * scale, width: fp.w * scale, height: fp.h * scale,
+                  borderColor: it.color, backgroundColor: it.color + 'BB',
+                  backgroundImage: it.img ? `url("${it.img}")` : 'none',
+                  backgroundSize: 'cover', backgroundPosition: 'center',
+                }}>
+                <span className="px-1 rounded bg-white/90 text-ink font-mono font-semibold text-center leading-tight"
+                  style={{ fontSize: Math.max(8, Math.min(11, fp.w * scale / 6)) }}>
+                  {it.sku}<br />×{ms}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-center mt-2 font-display font-semibold text-sm">Customer Stands Here ↓</p>
+      </section>
+
+      <section>
+        <h2 className="font-display font-semibold text-base mb-3">Stacking report</h2>
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="text-left font-mono text-xs border-b-2 border-ink">
+              <th className="py-2 pr-3">SKU</th>
+              <th className="py-2 pr-3">Item</th>
+              <th className="py-2 pr-3">Shape</th>
+              <th className="py-2 pr-3">Dimensions ({unit})</th>
+              <th className="py-2 pr-3 text-right">Placements</th>
+              <th className="py-2 pr-3 text-right">Max stack</th>
+              <th className="py-2 text-right">Total units</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.item.sku} className="border-b border-icebd">
+                <td className="py-2 pr-3 font-mono">{r.item.sku}</td>
+                <td className="py-2 pr-3">{r.item.name}</td>
+                <td className="py-2 pr-3">{r.item.shape}</td>
+                <td className="py-2 pr-3 font-mono text-xs">{dimLabel(r.item, unit)}</td>
+                <td className="py-2 pr-3 text-right font-mono">{r.placements}</td>
+                <td className="py-2 pr-3 text-right font-mono">{r.ms}</td>
+                <td className="py-2 text-right font-mono font-semibold">{r.total}</td>
+              </tr>
+            ))}
+            <tr>
+              <td colSpan="6" className="py-3 pr-3 text-right font-display font-semibold">Grand total</td>
+              <td className="py-3 text-right font-mono font-bold text-base">{grandTotal}</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  );
+}
+
+/* ---------- App ---------- */
+
+function App() {
+  const [phase, setPhase] = useState('setup');
+  const [unit, setUnit] = useState('in');
+  const [dims, setDims] = useState({ l: '60', w: '24', d: '30' });
+  const [inventory, setInventory] = useState([]);
+  const [placed, setPlaced] = useState([]);
+
+  const freezer = { l: parseFloat(dims.l) || 0, w: parseFloat(dims.w) || 0, d: parseFloat(dims.d) || 0 };
+
+  const startPlanning = () => {
+    // Drop placements that no longer fit if dimensions changed
+    setPlaced((ps) => ps.filter((p) => {
+      const it = inventory.find((i) => i.id === p.itemId);
+      if (!it) return false;
+      const fp = footprint(it);
+      return p.x >= 0 && p.y >= 0 && p.x + fp.w <= freezer.l && p.y + fp.h <= freezer.w;
+    }));
+    setPhase('plan');
+  };
+
+  const startOver = () => {
+    setInventory([]);
+    setPlaced([]);
+    setPhase('setup');
+  };
+
+  return (
+    <React.Fragment>
+      {phase !== 'print' && <Header phase={phase} />}
+      {phase === 'setup' && (
+        <SetupPhase unit={unit} setUnit={setUnit} dims={dims} setDims={setDims}
+          inventory={inventory} setInventory={setInventory} onStart={startPlanning} />
+      )}
+      {phase === 'plan' && (
+        <PlanPhase unit={unit} freezer={freezer} inventory={inventory}
+          placed={placed} setPlaced={setPlaced}
+          onStartOver={startOver} onPrint={() => setPhase('print')} onBackToSetup={() => setPhase('setup')} />
+      )}
+      {phase === 'print' && (
+        <PrintPhase unit={unit} freezer={freezer} inventory={inventory} placed={placed} onBack={() => setPhase('plan')} />
+      )}
+    </React.Fragment>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
