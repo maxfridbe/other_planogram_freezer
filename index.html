@@ -164,13 +164,32 @@ const dimLabel = (it, unit) =>
     ? `r${it.radius}${unit} × ${it.d}${unit} deep`
     : `${it.l} × ${it.w} × ${it.d} ${unit}`;
 
+// Quote-aware CSV field splitter (handles commas inside quoted fields, "" escapes)
+function splitCSVLine(line) {
+  const out = [];
+  let cur = '';
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQ) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false;
+      } else cur += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ',') { out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
 function parseCSV(text) {
   const errors = [];
   const items = [];
   const lines = text.trim().split(/\r?\n/).filter((l) => l.trim() !== '');
   if (lines.length === 0) return { items, errors: ['No CSV data provided.'] };
 
-  const headers = lines[0].split(',').map((h) => h.trim().toLowerCase());
+  const headers = splitCSVLine(lines[0]).map((h) => h.toLowerCase());
   const col = (n) => headers.indexOf(n);
   for (const req of ['name', 'sku', 'shape']) {
     if (col(req) === -1) errors.push(`Missing required header "${req}". Expected: Name, SKU, Shape, L, W, D, Radius, ImgURL`);
@@ -179,7 +198,7 @@ function parseCSV(text) {
 
   lines.slice(1).forEach((line, i) => {
     const row = i + 2;
-    const cells = line.split(',').map((c) => c.trim());
+    const cells = splitCSVLine(line);
     const get = (n) => (col(n) === -1 ? '' : cells[col(n)] || '');
     const num = (n) => parseFloat(get(n));
 
@@ -200,6 +219,104 @@ function parseCSV(text) {
     items.push(item);
   });
   return { items, errors };
+}
+
+/* ---------- plan save/load (settings + inventory + placements in one CSV) ---------- */
+
+function buildPlanCSV(unit, freezer, inventory, placed) {
+  const q = (v) => {
+    const s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [
+    '#FROSTPLAN,v1',
+    '#SETTINGS',
+    'Unit,Length,Width,Depth',
+    [unit, freezer.l, freezer.w, freezer.d].join(','),
+    '#INVENTORY',
+    'Name,SKU,Shape,L,W,D,Radius,ImgURL,Color',
+  ];
+  inventory.forEach((it) => lines.push([
+    q(it.name), q(it.sku), it.shape,
+    it.l ?? '', it.w ?? '', it.d ?? '', it.radius ?? '',
+    q(it.img || ''), it.color || '',
+  ].join(',')));
+  lines.push('#PLACEMENTS', 'SKU,X,Y');
+  placed.forEach((p) => {
+    const it = inventory.find((i) => i.id === p.itemId);
+    if (it) lines.push([q(it.sku), (+p.x).toFixed(3), (+p.y).toFixed(3)].join(','));
+  });
+  return lines.join('\n');
+}
+
+function parsePlanCSV(text) {
+  const errors = [];
+  const lines = String(text).split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
+  if (!lines.length || !lines[0].startsWith('#FROSTPLAN')) {
+    return { errors: ['Not a FrostPlan file — expected a "#FROSTPLAN" header on the first line.'] };
+  }
+  const sec = { settings: [], inventory: [], placements: [] };
+  let section = null;
+  for (const line of lines.slice(1)) {
+    if (line === '#SETTINGS') { section = 'settings'; continue; }
+    if (line === '#INVENTORY') { section = 'inventory'; continue; }
+    if (line === '#PLACEMENTS') { section = 'placements'; continue; }
+    if (section) sec[section].push(line);
+  }
+
+  let unit = 'in';
+  let dims = null;
+  if (sec.settings.length >= 2) {
+    const cells = splitCSVLine(sec.settings[1]);
+    unit = cells[0] === 'cm' ? 'cm' : 'in';
+    dims = { l: cells[1] || '', w: cells[2] || '', d: cells[3] || '' };
+    if (!(parseFloat(dims.l) > 0 && parseFloat(dims.w) > 0 && parseFloat(dims.d) > 0)) {
+      errors.push('Settings: freezer dimensions must be positive numbers.');
+      dims = null;
+    }
+  } else errors.push('Missing #SETTINGS section.');
+
+  const items = [];
+  if (sec.inventory.length >= 1) {
+    const heads = splitCSVLine(sec.inventory[0]).map((h) => h.toLowerCase());
+    const col = (n) => heads.indexOf(n);
+    sec.inventory.slice(1).forEach((line, i) => {
+      const row = i + 1;
+      const cells = splitCSVLine(line);
+      const get = (n) => (col(n) === -1 ? '' : cells[col(n)] || '');
+      const num = (n) => parseFloat(get(n));
+      const name = get('name'), sku = get('sku'), shape = get('shape').toLowerCase();
+      if (!name || !sku) { errors.push(`Inventory row ${row}: Name and SKU are required.`); return; }
+      if (shape !== 'box' && shape !== 'cylinder') { errors.push(`Inventory row ${row}: Shape must be "box" or "cylinder".`); return; }
+      const item = {
+        id: uid(), name, sku, shape,
+        img: get('imgurl') || null,
+        color: get('color') || PALETTE[items.length % PALETTE.length],
+      };
+      if (shape === 'box') {
+        const l = num('l'), w = num('w'), d = num('d');
+        if (!(l > 0 && w > 0 && d > 0)) { errors.push(`Inventory row ${row}: Box "${name}" requires positive L, W, and D.`); return; }
+        Object.assign(item, { l, w, d });
+      } else {
+        const r = num('radius'), d = num('d');
+        if (!(r > 0 && d > 0)) { errors.push(`Inventory row ${row}: Cylinder "${name}" requires positive Radius and D.`); return; }
+        Object.assign(item, { radius: r, d });
+      }
+      items.push(item);
+    });
+  } else errors.push('Missing #INVENTORY section.');
+
+  const placements = [];
+  sec.placements.slice(1).forEach((line, i) => {
+    const [sku, xs, ys] = splitCSVLine(line);
+    const it = items.find((x) => x.sku === sku);
+    const x = parseFloat(xs), y = parseFloat(ys);
+    if (!it) { errors.push(`Placement row ${i + 1}: no inventory item with SKU "${sku}".`); return; }
+    if (!isFinite(x) || !isFinite(y)) { errors.push(`Placement row ${i + 1}: invalid coordinates.`); return; }
+    placements.push({ pid: uid(), itemId: it.id, x, y });
+  });
+
+  return { unit, dims, items, placements, errors };
 }
 
 /* ---------- small UI atoms ---------- */
@@ -253,10 +370,31 @@ function Header({ phase }) {
 
 /* ---------- Setup phase ---------- */
 
-function SetupPhase({ unit, setUnit, dims, setDims, inventory, setInventory, onStart }) {
+function SetupPhase({ unit, setUnit, dims, setDims, inventory, setInventory, onStart, onLoadPlan }) {
   const [showCSV, setShowCSV] = useState(false);
   const [csvText, setCsvText] = useState('');
   const [csvErrors, setCsvErrors] = useState([]);
+  const [loadMsg, setLoadMsg] = useState('');
+  const [loadErrors, setLoadErrors] = useState([]);
+  const fileRef = useRef(null);
+
+  const handleLoadFile = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const r = parsePlanCSV(reader.result);
+      setLoadErrors(r.errors || []);
+      if (r.items && r.items.length && r.dims) {
+        onLoadPlan(r);
+        setLoadMsg(`Loaded ${r.items.length} item${r.items.length === 1 ? '' : 's'} and ${r.placements.length} placement${r.placements.length === 1 ? '' : 's'} from ${file.name}.`);
+      } else {
+        setLoadMsg('');
+      }
+    };
+    reader.readAsText(file);
+  };
 
   const fz = { l: parseFloat(dims.l) || 0, w: parseFloat(dims.w) || 0, d: parseFloat(dims.d) || 0 };
   const dimsValid = fz.l > 0 && fz.w > 0 && fz.d > 0;
@@ -284,6 +422,28 @@ function SetupPhase({ unit, setUnit, dims, setDims, inventory, setInventory, onS
 
   return (
     <main className="max-w-5xl mx-auto px-4 md:px-8 py-8 space-y-6">
+      <section className="bg-white rounded-xl border border-icebd shadow-sm p-5 md:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-display font-semibold text-base mb-1">Resume a saved plan</h2>
+            <p className="text-sm text-inkmute">Load a FrostPlan CSV (saved from the planning screen) to restore settings, inventory, and placements.</p>
+          </div>
+          <div>
+            <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleLoadFile} />
+            <button onClick={() => fileRef.current && fileRef.current.click()}
+              className="px-3 py-2 rounded-lg border border-icebd text-sm font-medium hover:bg-frost">
+              Load plan CSV…
+            </button>
+          </div>
+        </div>
+        {loadMsg && <p className="mt-3 text-sm font-medium text-glacierdeep">✓ {loadMsg}</p>}
+        {loadErrors.length > 0 && (
+          <ul className="mt-3 space-y-1">
+            {loadErrors.map((err, i) => <li key={i} className="text-xs text-red-600">⚠ {err}</li>)}
+          </ul>
+        )}
+      </section>
+
       <section className="bg-white rounded-xl border border-icebd shadow-sm p-5 md:p-6">
         <h2 className="font-display font-semibold text-base mb-1">Freezer chest</h2>
         <p className="text-sm text-inkmute mb-4">Internal dimensions of the chest, viewed from above. Depth is how deep items stack.</p>
@@ -560,6 +720,18 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
   const removePlaced = (pid) => setPlaced((ps) => ps.filter((p) => p.pid !== pid));
   const gridStep = unit === 'in' ? 6 : 10;
 
+  const saveCSV = () => {
+    const blob = new Blob([buildPlanCSV(unit, freezer, inventory, placed)], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'frostplan-planogram.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
   return (
     <main className="flex flex-col md:flex-row md:h-[calc(100vh-4.5625rem)]">
       {/* Inventory panel — top strip on mobile, left column on desktop */}
@@ -601,6 +773,7 @@ function PlanPhase({ unit, freezer, inventory, placed, setPlaced, onStartOver, o
           </p>
           <div className="flex items-center gap-2">
             <button onClick={onBackToSetup} className="px-3 py-1.5 rounded-lg border border-icebd text-xs font-medium hover:bg-frost">← Setup</button>
+            <button onClick={saveCSV} className="px-3 py-1.5 rounded-lg border border-icebd text-xs font-medium hover:bg-frost">Save CSV</button>
             {confirmReset ? (
               <span className="flex items-center gap-1.5 text-xs">
                 <span className="text-red-600 font-medium">Erase everything?</span>
@@ -715,9 +888,15 @@ function PrintPhase({ unit, freezer, inventory, placed, onBack }) {
 
   return (
     <main className="max-w-3xl mx-auto px-6 py-8">
-      <div className="no-print mb-6 flex gap-2">
+      <div className="no-print mb-6 flex flex-wrap items-center gap-2">
         <button onClick={onBack} className="px-4 py-2 rounded-lg border border-icebd text-sm font-medium hover:bg-frost">← Back to planning</button>
         <button onClick={() => window.print()} className="px-4 py-2 rounded-lg bg-glacier text-white text-sm font-medium hover:bg-glacierdeep">Print again</button>
+        <button onClick={() => window.print()}
+          title='In the print dialog, set the destination to "Save as PDF"'
+          className="px-4 py-2 rounded-lg bg-ink text-white text-sm font-medium hover:bg-glacierdeep">
+          Save as PDF
+        </button>
+        <span className="text-xs text-inkmute">PDF: choose “Save as PDF” as the destination in the dialog.</span>
       </div>
 
       <header className="border-b-2 border-ink pb-4 mb-6">
@@ -833,7 +1012,8 @@ function App() {
       {phase !== 'print' && <Header phase={phase} />}
       {phase === 'setup' && (
         <SetupPhase unit={unit} setUnit={setUnit} dims={dims} setDims={setDims}
-          inventory={inventory} setInventory={setInventory} onStart={startPlanning} />
+          inventory={inventory} setInventory={setInventory} onStart={startPlanning}
+          onLoadPlan={(r) => { setUnit(r.unit); setDims(r.dims); setInventory(r.items); setPlaced(r.placements); }} />
       )}
       {phase === 'plan' && (
         <PlanPhase unit={unit} freezer={freezer} inventory={inventory}
@@ -846,6 +1026,9 @@ function App() {
     </React.Fragment>
   );
 }
+
+// Exposed for headless testing and console debugging
+window.__frostplan = { parseCSV, parsePlanCSV, buildPlanCSV, splitCSVLine };
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 </script>
